@@ -1,0 +1,24 @@
+# zijing-payroll — full-stack Next.js app (Node server + Prisma + SQLite).
+# Replaces the old nginx static container. Container :3000 -> host 10110.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zijing-payroll-web:latest
+    container_name: zijing-payroll-web
+    restart: unless-stopped
+    ports:
+      - "10110:3000"
+    environment:
+      # SQLite on the mounted volume (persists across restarts).
+      - DATABASE_URL=file:/app/data/payroll.db
+      # Strong random secret for signing session cookies.
+      - SESSION_SECRET=NhLRndpOlj12PYedWNDt3kRKsD+evvBEv+EcvXepeK8=
+      - NODE_ENV=production
+      - TZ=Asia/Shanghai
+      # COOKIE_SECURE stays unset -> httpOnly cookie works over intranet HTTP.
+      # Set to "true" if you later put HTTPS in front.
+    volumes:
+      # Persist the SQLite database file.
+      - ./data:/app/data

@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build outputs
+.next/
+out/
+build/
+dist/
+
+# Local env files (keep .env for Railway deployment — no real secrets)
+.env*.local
+.env.development
+
+# Dev logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev.log
+server.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Misc
+*.tsbuildinfo
+next-env.d.ts
+prisma/dev.db
+prisma/*.db
+
+# Coverage
+coverage/
+
+# Test artifacts
+.nyc_output/
+
+# Cache
+.cache/
+.parcel-cache/
+.eslintcache

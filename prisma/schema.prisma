@@ -1,0 +1,242 @@
+// Prisma schema for hortor-payroll.
+// SQLite is used for zero-ops intranet deployment. Nested objects
+// (prevCumulative, manualCumulative) are stored as JSON columns.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Authentication ----------
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  // ADMIN: full access + user management. EMPLOYEE: sees only own payslips.
+  role         String   @default("EMPLOYEE") // "ADMIN" | "EMPLOYEE"
+  // For EMPLOYEE role: the employee profile this login is bound to.
+  // null for ADMIN (admins are not employees).
+  employeeId   String?  @unique
+  employee     Employee? @relation("EmployeeUser", fields: [employeeId], references: [id], onDelete: SetNull)
+  active       Boolean  @default(true)
+  mustChangePwd Boolean @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role])
+}
+
+// ---------- Employee profile ----------
+// Mirrors the `Employee` TypeScript interface (src/lib/types.ts).
+// IDs use cuid() instead of the old client-side `emp_${timestamp}_${random}`.
+model Employee {
+  id           String   @id @default(cuid())
+  name         String
+  idNumber     String?
+  // '豪腾灵动' | '豪腾创想' | '境外主体' | '外包'
+  entity       String
+  // '全职' | '实习生' | '外包'
+  employmentType String
+  // 'RMB' | 'HKD'
+  currency     String
+  department   String?
+  // '在职' | '离职'
+  status       String   @default("在职")
+  baseSalary   Float    @default(0)
+  dailyRate    Float?
+  // '月薪' | '日薪' (interns)
+  internSalaryType String?
+  housingFundBase Float?
+  socialBase    Float?
+  monthlySpecialAdditionalDeduction Float?
+  // Individual income tax special additional deductions (breakdown):
+  // 子女教育 / 继续教育 / 住房贷款利息 / 住房租金 / 赡养老人 / 婴幼儿照护
+  taxChildEducation       Float?  // 子女教育: 0/1000/2000/3000/4000/6000
+  taxContinuingEducation  Float?  // 继续教育: free input
+  taxHousingLoanInterest  Float?  // 住房贷款利息: 0/1000
+  taxHousingRent          Float?  // 住房租金: 1500/1100/800/0
+  taxElderlySupport       Float?  // 赡养老人: free input
+  taxInfantCare           Float?  // 婴幼儿照护: 0/1000/2000/3000/4000/6000
+  defaultHousingFundRatio Float @default(0.05)
+  // Whether the employee holds a Shenzhen hukou (affects company pension rate).
+  isShenzhenHukou Boolean @default(false)
+  joinDate     String?
+  leaveDate    String?
+  notes        String?
+  noHousingAllowance Boolean?
+  // Year-start cumulative tax carryover for SZ full-time (stored as JSON).
+  prevCumulative Json?
+  prevCumulativeYear Int?
+  // Work city for social insurance base lookup (e.g. "深圳", "上海").
+  // Defaults to "深圳" when absent.
+  workCity     String?
+  // Back-link to the bound login account (if any).
+  user         User?    @relation("EmployeeUser")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  payrollInputs  PayrollInput[]
+  payrollRecords PayrollRecord[]
+  taxDeductions  TaxDeduction[]
+
+  @@index([entity])
+  @@index([status])
+}
+
+// ---------- Per-employee, per-month working inputs ----------
+// Keyed uniquely by (employeeId, year, month). Replaces the old
+// store.payrollInputs map.
+model PayrollInput {
+  id           String   @id @default(cuid())
+  employeeId   String
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  year         Int
+  month        Int
+  scheduledDays Float   @default(21.75)
+  attendanceDays Float  @default(0)
+  personalLeaveHours Float @default(0)
+  sickLeaveDays Float   @default(0)
+  adjustment   Float    @default(0)
+  bonus        Float    @default(0)
+  housingFundRatio Float?
+  specialAdditionalDeduction Float?
+  manualPayable Float?
+  notes        String?
+  // Manual cumulative-tax override (SZ full-time). JSON.
+  manualCumulative Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([employeeId, year, month])
+  @@index([year, month])
+}
+
+// ---------- Per-employee, per-month individual tax additional deductions ----------
+// 6 项专项附加扣除. Keyed uniquely by (employeeId, year, month).
+// 全 0 = 无扣除; 缺失 = 默认 0.
+model TaxDeduction {
+  id                       String   @id @default(cuid())
+  employeeId               String
+  employee                 Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  year                     Int
+  month                    Int
+  taxChildEducation        Float    @default(0)
+  taxContinuingEducation   Float    @default(0)
+  taxHousingLoanInterest   Float    @default(0)
+  taxHousingRent           Float    @default(0)
+  taxElderlySupport        Float    @default(0)
+  taxInfantCare            Float    @default(0)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([employeeId, year, month])
+  @@index([year, month])
+}
+
+// ---------- Saved payroll snapshot (one per employee per year-month) ----------
+// Denormalizes employee name/entity/etc at save time, like the old savedRecords.
+model PayrollRecord {
+  id           String   @id @default(cuid())
+  employeeId   String
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  year         Int
+  month        Int
+  // Snapshot of employee identity at save time.
+  employeeName String
+  entity       String
+  employmentType String
+  currency     String
+  department   String?
+  // --- PayrollInput fields (frozen snapshot) ---
+  scheduledDays Float   @default(21.75)
+  attendanceDays Float  @default(0)
+  personalLeaveHours Float @default(0)
+  sickLeaveDays Float   @default(0)
+  adjustment   Float    @default(0)
+  bonus        Float    @default(0)
+  housingFundRatio Float?
+  specialAdditionalDeduction Float?
+  manualPayable Float?
+  notes        String?
+  manualCumulative Json?
+  // --- PayrollResult fields (computed snapshot) ---
+  accruedSalary Float @default(0)
+  pensionPersonal Float @default(0)
+  medicalPersonal Float @default(0)
+  unemploymentPersonal Float @default(0)
+  housingFundPersonal Float @default(0)
+  mpfPersonal Float @default(0)
+  // Company-side social insurance / MPF (employer portion).
+  pensionCompany Float @default(0)
+  medicalCompany Float @default(0)
+  unemploymentCompany Float @default(0)
+  maternityCompany Float @default(0)
+  workInjuryCompany Float @default(0)
+  housingFundCompany Float @default(0)
+  mpfCompany Float @default(0)
+  employerCost Float @default(0)
+  taxWithheld Float @default(0)
+  // Cumulative tax detail (SZ full-time). Stored as JSON for flexibility.
+  cumIncome Float?
+  cumDeduction Float?
+  cumSpecial Float?
+  taxableIncome Float?
+  taxRate Float?
+  quickDeduction Float?
+  cumTaxPayable Float?
+  prevTaxPaid Float?
+  housingAllowance Float @default(0)
+  payableAmount Float @default(0)
+  payableHKD Float?
+  payableRMB Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([employeeId, year, month])
+  @@index([year, month])
+  @@index([employeeId])
+}
+
+// ---------- App-level settings (company name, department list, etc.) ----------
+// Single row (id = "singleton"). Stored as JSON for flexibility.
+model Settings {
+  id           String   @id @default("singleton")
+  // Display name shown in headers / browser title.
+  companyName  String   @default("Hortor Payroll System")
+  // Signed entities (JSON array of {name, calcType}).
+  // calcType: "shenzhen" (SZ social insurance) | "hongkong" (MPF) | "outsourcing".
+  entities     Json?
+  // Departments (JSON array of {name, isRnD}).
+  departments  Json?
+  updatedAt    DateTime @updatedAt
+}
+// Single global row (id = "singleton"). Replaces store.config.
+model Config {
+  id           String   @id @default("singleton")
+  year         Int      @default(2026)
+  month        Int      @default(1)
+  szWorkingDays Float   @default(21.75)
+  hkWorkingDays Float   @default(30)
+  housingAllowance Float @default(2000)
+  exchangeRate Float    @default(1.15)
+  szPensionBaseMin Float @default(4775)
+  szPensionBaseMax Float @default(27549)
+  szMedicalBaseMin Float @default(6727)
+  szMedicalBaseMax Float @default(33633)
+  szUnemploymentBaseMin Float @default(2520)
+  szUnemploymentBaseMax Float @default(44265)
+  szHousingFundBaseMin Float @default(4775)
+  szHousingFundBaseMax Float @default(27549)
+  // Multi-city social insurance base configuration (JSON array of CityConfig).
+  // Falls back to the sz* fields above when a city is not found.
+  citySocialConfigs Json?
+  // Local minimum wage by city, used for sick-leave pay calculation.
+  // Default values are seeded from prisma/seed.ts (SQLite Json columns do
+  // not support inline JSON-string defaults).
+  minimumWageByCity Json?
+  updatedAt    DateTime @updatedAt
+}
