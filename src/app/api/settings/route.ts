@@ -6,7 +6,7 @@ import { withErrorHandler, errorResponse, json } from '@/lib/api';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface EntityConfig { name: string; calcType: 'shenzhen' | 'hongkong' | 'outsourcing'; }
+interface EntityConfig { name: string; calcType: 'shenzhen' | 'hongkong' | 'beijing'; }
 interface DeptConfig { name: string; isRnD: boolean; }
 interface AppSettings {
   companyName: string;
@@ -77,7 +77,7 @@ export const PUT = withErrorHandler(async (req: NextRequest) => {
   if (Array.isArray(body.entities)) {
     data.entities = (body.entities as EntityConfig[]).filter((e) => e.name?.trim()).map((e) => ({
       name: String(e.name).trim(),
-      calcType: ['shenzhen', 'hongkong', 'outsourcing'].includes(e.calcType) ? e.calcType : 'shenzhen',
+      calcType: ['shenzhen', 'hongkong', 'beijing'].includes(e.calcType) ? e.calcType : 'shenzhen',
     }));
   }
   if (Array.isArray(body.departments)) {

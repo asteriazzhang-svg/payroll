@@ -23,7 +23,8 @@ export const DEFAULT_CONFIG: PayPeriodConfig = {
   szWorkingDays: 21.75,
   hkWorkingDays: 30,
   housingAllowance: 2000,
-  exchangeRate: 1.07,
+  // RMB→USD exchange rate (1 RMB = 1/7.2 USD ≈ 0.139 USD)
+  exchangeRate: 7.2,
   // 2026 深圳社保 / 公积金缴费基数上下限（来自广东人社厅、深圳医保局官方公告）
   szPensionBaseMin: 4775,
   szPensionBaseMax: 27549,
@@ -459,7 +460,11 @@ function calculateShenzhenFullTime(
   const cumIncome = basePrevCum.cumIncome + monthlyIncome;
   const cumDeduction = basePrevCum.cumDeduction + MONTHLY_DEDUCTION;
   const cumSpecial = basePrevCum.cumSpecial + monthlySpecialDeduction;
-  // Sum of 6 individual tax deduction categories, or legacy single field
+  // (2.7) Cumulative individual tax additional deduction.
+  // Priority: per-month TaxDeduction record (injected via employee.taxXxx
+  // by the calculator before calling this function) > legacy single
+  // employee.monthlySpecialAdditionalDeduction field > 0.
+  // Per-month record wins over the legacy per-employee field.
   const breakdownSum =
     (employee.taxChildEducation ?? 0) +
     (employee.taxContinuingEducation ?? 0) +
@@ -650,7 +655,8 @@ function calculateHongKongFullTime(
 function calculateIntern(
   employee: Employee,
   input: PayrollInput,
-  config: PayPeriodConfig
+  config: PayPeriodConfig,
+  prevRecord?: PayrollRecord | null
 ): PayrollResult {
   const isDaily = employee.internSalaryType === '日薪';
   const currency = employee.currency;
@@ -669,33 +675,42 @@ function calculateIntern(
     accruedSalary = round2((base / scheduledDays) * input.attendanceDays);
   }
 
-  // 2. Tax (labor service remuneration) — only for monthly interns
-  let taxWithheld = 0;
-  let taxableIncome = 0;
-  let taxRate = 0;
-  let quickDeduction = 0;
-  if (!isDaily) {
-    const income = accruedSalary + input.adjustment;
-    let deduction: number;
-    if (income <= 4000) {
-      deduction = 800;
-    } else {
-      deduction = income * 0.2;
-    }
-    taxableIncome = Math.max(0, income - deduction);
-    const bracket = findLaborTaxBracket(taxableIncome);
-    taxRate = bracket.rate;
-    quickDeduction = bracket.quickDeduction;
-    taxWithheld = round2(
-      taxableIncome * bracket.rate - bracket.quickDeduction
-    );
-  }
+  // 2. Cumulative withholding tax (same model as full-time employees).
+  // Interns use the standard cumulative model — cumulative deduction (5000/mo)
+  // is subtracted from cumulative income before calculating tax.
+  const basePrevCum = input.manualCumulative
+    ? {
+        cumIncome: input.manualCumulative.cumIncome,
+        cumDeduction: input.manualCumulative.cumDeduction,
+        cumSpecial: input.manualCumulative.cumSpecial,
+        cumSpecialAdditional: input.manualCumulative.cumSpecialAdditional,
+        taxPaid: input.manualCumulative.taxPaid,
+      }
+    : prevRecord
+      ? {
+          cumIncome: prevRecord.cumIncome ?? 0,
+          cumDeduction: prevRecord.cumDeduction ?? 0,
+          cumSpecial: prevRecord.cumSpecial ?? 0,
+          cumSpecialAdditional: prevRecord.cumSpecialAdditional ?? 0,
+          taxPaid: prevRecord.cumTaxPayable ?? 0,
+        }
+      : (employee.prevCumulative &&
+         (!employee.prevCumulativeYear || employee.prevCumulativeYear === input.year)
+          ? employee.prevCumulative
+          : computeJoinDateBaseline(employee, input));
 
-  // 3. Housing allowance: flat 2000 for eligible employees
-  // 外包员工一律不发放房补.
-  const housingAllowance = (employee.noHousingAllowance || employee.employmentType === '外包')
-    ? 0
-    : config.housingAllowance;
+  const cumIncome = basePrevCum.cumIncome + accruedSalary + input.adjustment;
+  const cumDeduction = basePrevCum.cumDeduction + MONTHLY_DEDUCTION;
+  const cumSpecial = 0; // interns have no social insurance
+  const cumSpecialAdditional = 0; // interns are not entitled to additional deductions
+
+  const taxableIncome = Math.max(0, cumIncome - cumDeduction - cumSpecial - cumSpecialAdditional);
+  const bracket = findTaxBracket(taxableIncome);
+  const cumTaxPayable = round2(taxableIncome * bracket.rate - bracket.quickDeduction);
+  const taxWithheld = round2(Math.max(0, cumTaxPayable - basePrevCum.taxPaid));
+
+  // 3. Housing allowance — interns do not receive housing allowance.
+  const housingAllowance = 0;
 
   // 4. Final payable
   const payableAmount = round2(
@@ -707,7 +722,7 @@ function calculateIntern(
     employeeName: employee.name,
     entity: employee.entity,
     employmentType: employee.employmentType,
-    currency: currency, // use payment currency
+    currency: currency,
     accruedSalary,
     pensionPersonal: 0,
     medicalPersonal: 0,
@@ -723,9 +738,14 @@ function calculateIntern(
     mpfCompany: 0,
     employerCost: accruedSalary,
     taxWithheld,
+    cumIncome: round2(cumIncome),
+    cumDeduction: round2(cumDeduction),
+    cumSpecial: round2(cumSpecial),
     taxableIncome: round2(taxableIncome),
-    taxRate,
-    quickDeduction,
+    taxRate: bracket.rate,
+    quickDeduction: bracket.quickDeduction,
+    cumTaxPayable,
+    prevTaxPaid: basePrevCum.taxPaid,
     housingAllowance,
     bonus: input.bonus ?? 0,
     adjustment: input.adjustment,
@@ -796,7 +816,7 @@ export function calculatePayroll(
   }
   // Interns
   else if (employee.employmentType === '实习生') {
-    result = calculateIntern(employee, input, config);
+    result = calculateIntern(employee, input, config, prevRecord);
   }
   // Full-time employees — 豪腾灵动 and 豪腾创想 both use mainland SZ rules
   else if (employee.entity === '豪腾灵动' || employee.entity === '豪腾创想') {
@@ -808,16 +828,15 @@ export function calculatePayroll(
     result = calculateShenzhenFullTime(employee, input, config, prevRecord);
   }
 
-  // Cross-currency reference values:
-  // - RMB-paid employees: show 折算港币 (payableHKD)
-  // - HKD-paid mainland employees: show 折算人民币 (payableRMB)
+  // Cross-currency reference values (RMB↔USD only; HKD is no longer used).
+  // - RMB-paid employees: show 折算美元 (payableUSD, stored in payableHKD field for backward compat)
+  // - USD-paid mainland employees: show 折算人民币 (payableRMB)
   let payableHKD: number | undefined;
   let payableRMB: number | undefined;
   if (result.currency === 'RMB') {
-    payableHKD = round2(result.payableAmount * config.exchangeRate);
+    payableHKD = round2(result.payableAmount / config.exchangeRate); // 折算美元
   } else if (employee.entity === '豪腾灵动' || employee.entity === '豪腾创想') {
-    // HKD-paid mainland employee: payableAmount is HKD; record the RMB basis.
-    payableRMB = round2(result.payableAmount / config.exchangeRate);
+    payableRMB = round2(result.payableAmount * config.exchangeRate);
   }
 
   return { ...result, payableHKD, payableRMB };
@@ -831,10 +850,10 @@ export function convertToHKD(rmbAmount: number, exchangeRate: number): number {
 }
 
 /**
- * Format currency
+ * Format currency. USD → $, RMB → ¥, HKD → HK$ (legacy).
  */
 export function formatCurrency(amount: number, currency: string = 'RMB'): string {
-  const symbol = currency === 'HKD' ? 'HK$' : '¥';
+  const symbol = currency === 'HKD' ? 'HK$' : currency === 'USD' ? '$' : '¥';
   return `${symbol}${amount.toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

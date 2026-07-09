@@ -75,18 +75,45 @@ export const usePayrollStore = create<PayrollStore>((set, get) => ({
       for (const r of records) {
         savedRecords[recordKey(r.year, r.month, r.employeeId)] = r;
       }
+
+      // (2.6) Default payroll period: earliest month of config.year that has
+      // NO saved records yet. e.g. if 2026/1 has records but 2026/2 doesn't,
+      // jump to 2026/2 on login.
+      const targetYear = config.year;
+      const savedMonthsInYear = new Set(
+        Object.values(savedRecords)
+          .filter((r) => r.year === targetYear)
+          .map((r) => r.month)
+      );
+      let targetMonth = config.month;
+      for (let m = 1; m <= 12; m++) {
+        if (!savedMonthsInYear.has(m)) {
+          targetMonth = m;
+          break;
+        }
+      }
+      // If the server-sent config month differs from the auto-picked target,
+      // sync it to the server so all components see the same period.
+      let effectiveConfig = config;
+      if (config.month !== targetMonth) {
+        effectiveConfig = { ...config, month: targetMonth };
+        try {
+          await api('/api/config', { method: 'PUT', body: { month: targetMonth } });
+        } catch { /* best-effort */ }
+      }
+
       // Also load working inputs for the current config month (so a page
       // refresh doesn't lose half-filled attendance data).
       let payrollInputs: Record<string, PayrollInput> = {};
       try {
         const inputsMap = await api<Record<string, PayrollInput>>(
-          `/api/payroll/inputs?year=${config.year}&month=${config.month}`
+          `/api/payroll/inputs?year=${effectiveConfig.year}&month=${effectiveConfig.month}`
         );
         payrollInputs = inputsMap ?? {};
       } catch {
         // inputs are best-effort; don't block app load if this fails.
       }
-      set({ employees, config, savedRecords, payrollInputs, loaded: true, loading: false });
+      set({ employees, config: effectiveConfig, savedRecords, payrollInputs, loaded: true, loading: false });
     } catch (e) {
       set({ loading: false });
       throw e;

@@ -58,20 +58,23 @@ export function PayrollHistory() {
     );
   }, [records, filterValue]);
 
-  // Totals
+  // Totals — all in RMB (USD converted at config exchangeRate)
   const totals = useMemo(() => {
-    let accrued = 0, deductions = 0, tax = 0, meal = 0;
-    let payableRMB = 0, payableHKD = 0;
+    let accrued = 0, deductionsPersonal = 0, deductionsCompany = 0, tax = 0, meal = 0;
+    let payableRMB = 0;
     for (const { record } of filteredRecords) {
-      accrued += record.accruedSalary;
-      deductions += record.pensionPersonal + record.medicalPersonal +
-        record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal;
-      tax += record.taxWithheld;
-      meal += record.housingAllowance;
-      if (record.currency === 'RMB') payableRMB += record.payableAmount;
-      else payableHKD += record.payableAmount;
+      const fx = record.currency === 'USD' ? (config?.exchangeRate ?? 7.2) : 1;
+      accrued += record.accruedSalary * fx;
+      deductionsPersonal += (record.pensionPersonal + record.medicalPersonal +
+        record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal) * fx;
+      deductionsCompany += (record.pensionCompany + record.medicalCompany +
+        record.unemploymentCompany + record.maternityCompany +
+        record.workInjuryCompany + record.housingFundCompany + record.mpfCompany) * fx;
+      tax += record.taxWithheld * fx;
+      meal += record.housingAllowance * fx;
+      payableRMB += record.payableAmount * fx;
     }
-    return { accrued, deductions, tax, meal, payableRMB, payableHKD };
+    return { accrued, deductionsPersonal, deductionsCompany, tax, meal, payableRMB };
   }, [filteredRecords]);
 
   const handleDelete = async (key: string, name: string, year: number, month: number) => {
@@ -202,32 +205,31 @@ export function PayrollHistory() {
 
           {/* Totals */}
           {filteredRecords.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4 p-3 bg-muted/30 rounded-md">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4 p-3 bg-muted/30 rounded-md">
               <div>
                 <div className="text-xs text-muted-foreground">应计薪资合计</div>
-                <div className="text-base font-bold">{formatNumber(totals.accrued)}</div>
+                <div className="text-base font-bold">¥{formatNumber(totals.accrued)}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">五险一金/MPF</div>
-                <div className="text-base font-bold text-red-600">{formatNumber(totals.deductions)}</div>
+                <div className="text-xs text-muted-foreground">个人侧五险一金合计</div>
+                <div className="text-base font-bold text-red-600">¥{formatNumber(totals.deductionsPersonal)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">公司侧五险一金合计</div>
+                <div className="text-base font-bold text-red-600">¥{formatNumber(totals.deductionsCompany)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">个税代扣</div>
-                <div className="text-base font-bold text-red-600">{formatNumber(totals.tax)}</div>
+                <div className="text-base font-bold text-red-600">¥{formatNumber(totals.tax)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">房补</div>
-                <div className="text-base font-bold text-green-600">{formatNumber(totals.meal)}</div>
+                <div className="text-base font-bold text-green-600">¥{formatNumber(totals.meal)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">应发合计</div>
-                <div className="text-base font-bold space-y-0.5">
-                  {totals.payableRMB > 0 && (
-                    <div className="text-blue-600">¥{formatNumber(totals.payableRMB)}</div>
-                  )}
-                  {totals.payableHKD > 0 && (
-                    <div className="text-green-600">HK${formatNumber(totals.payableHKD)}</div>
-                  )}
+                <div className="text-base font-bold">
+                  <span className="text-blue-600">¥{formatNumber(totals.payableRMB)}</span>
                 </div>
               </div>
             </div>
@@ -244,7 +246,8 @@ export function PayrollHistory() {
                   <TableHead className="text-right min-w-[120px]">应计薪资</TableHead>
                   <TableHead className="text-right min-w-[100px]">房补</TableHead>
                   <TableHead className="text-right min-w-[100px]">奖金</TableHead>
-                  <TableHead className="text-right min-w-[120px]">五险一金</TableHead>
+                  <TableHead className="text-right min-w-[120px]">个人侧五险一金</TableHead>
+                  <TableHead className="text-right min-w-[120px]">公司侧五险一金</TableHead>
                   <TableHead className="text-right min-w-[100px]">个税</TableHead>
                   <TableHead className="text-right min-w-[100px]">调整项</TableHead>
                   <TableHead className="text-right min-w-[130px]">应发金额</TableHead>
@@ -256,6 +259,10 @@ export function PayrollHistory() {
                   const totalDed =
                     record.pensionPersonal + record.medicalPersonal +
                     record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal;
+                  const totalDedCompany =
+                    record.pensionCompany + record.medicalCompany +
+                    record.unemploymentCompany + record.maternityCompany +
+                    record.workInjuryCompany + record.housingFundCompany + record.mpfCompany;
                   return (
                     <TableRow key={key}>
                       <TableCell className="font-medium">
@@ -289,6 +296,9 @@ export function PayrollHistory() {
                       </TableCell>
                       <TableCell className="text-right text-red-600">
                         {totalDed > 0 ? `-${formatNumber(totalDed)}` : '-'}
+                      </TableCell>
+                      <TableCell className="text-right text-red-600">
+                        {totalDedCompany > 0 ? `-${formatNumber(totalDedCompany)}` : '-'}
                       </TableCell>
                       <TableCell className="text-right text-red-600">
                         {record.taxWithheld > 0 ? `-${formatNumber(record.taxWithheld)}` : '-'}

@@ -5,7 +5,6 @@ import { useAuth } from '@/components/auth-provider';
 import { EmployeeManager } from '@/components/employee-manager';
 import { PayrollCalculator } from '@/components/payroll-calculator';
 import { PayrollHistory } from '@/components/payroll-history';
-import { TaxManagement } from '@/components/tax-management';
 import { Analytics } from '@/components/analytics';
 import { CalculationGuide } from '@/components/calculation-guide';
 import { MyPayslips } from '@/components/my-payslips';
@@ -14,7 +13,7 @@ import { SettingsPage } from '@/components/settings-page';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import {
-  Calculator, Users, BookOpen, Wallet, History, FileSpreadsheet,
+  Calculator, Users, BookOpen, Wallet, History,
   BarChart3, LogOut, Loader2, Receipt, UserCog, Settings as SettingsIcon,
 } from 'lucide-react';
 import { usePayrollStore } from '@/lib/store';
@@ -145,9 +144,6 @@ function AdminTabs({
         <TabsTrigger value="history" className="flex items-center gap-1">
           <History className="h-4 w-4" /> 历史记录
         </TabsTrigger>
-        <TabsTrigger value="tax" className="flex items-center gap-1">
-          <FileSpreadsheet className="h-4 w-4" /> 个税管理
-        </TabsTrigger>
         <TabsTrigger value="employees" className="flex items-center gap-1">
           <Users className="h-4 w-4" /> 员工管理
         </TabsTrigger>
@@ -164,7 +160,6 @@ function AdminTabs({
       <TabsContent value="payroll" className="mt-4"><PayrollCalculator /></TabsContent>
       <TabsContent value="analytics" className="mt-4"><Analytics /></TabsContent>
       <TabsContent value="history" className="mt-4"><PayrollHistory /></TabsContent>
-      <TabsContent value="tax" className="mt-4"><TaxManagement /></TabsContent>
       <TabsContent value="employees" className="mt-4"><EmployeeManager /></TabsContent>
       <TabsContent value="users" className="mt-4"><UserManagement /></TabsContent>
       <TabsContent value="settings" className="mt-4"><SettingsPage /></TabsContent>

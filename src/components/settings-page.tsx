@@ -8,13 +8,13 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { X, Plus, Building2, ListChecks, Settings as SettingsIcon, Loader2, Check, MapPin } from 'lucide-react';
+import { X, Plus, Building2, ListChecks, Settings as SettingsIcon, Loader2, Check, MapPin, Wallet } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
 import { usePayrollStore } from '@/lib/store';
 import { useToast } from '@/hooks/use-toast';
 import type { CityConfig } from '@/lib/types';
 
-interface EntityConfig { name: string; calcType: 'shenzhen' | 'hongkong' | 'outsourcing'; }
+interface EntityConfig { name: string; calcType: 'shenzhen' | 'hongkong' | 'beijing'; }
 interface DeptConfig { name: string; isRnD: boolean; }
 interface AppSettings {
   companyName: string;
@@ -25,7 +25,7 @@ interface AppSettings {
 const CALC_TYPE_LABELS: Record<string, string> = {
   shenzhen: '深圳社保',
   hongkong: '香港 MPF',
-  outsourcing: '外包',
+  beijing: '北京社保',
 };
 
 export function SettingsPage() {
@@ -141,12 +141,7 @@ export function SettingsPage() {
 
   const configFields: { key: keyof typeof config; label: string }[] = [
     { key: 'year', label: '当前年' }, { key: 'month', label: '当前月' },
-    { key: 'szWorkingDays', label: '深圳应计薪天数' }, { key: 'hkWorkingDays', label: '香港应计薪天数' },
-    { key: 'housingAllowance', label: '房补' }, { key: 'exchangeRate', label: '汇率 (RMB→HKD)' },
-    { key: 'szPensionBaseMin', label: '养老基数下限' }, { key: 'szPensionBaseMax', label: '养老基数上限' },
-    { key: 'szMedicalBaseMin', label: '医疗基数下限' }, { key: 'szMedicalBaseMax', label: '医疗基数上限' },
-    { key: 'szUnemploymentBaseMin', label: '失业基数下限' }, { key: 'szUnemploymentBaseMax', label: '失业基数上限' },
-    { key: 'szHousingFundBaseMin', label: '公积金基数下限' }, { key: 'szHousingFundBaseMax', label: '公积金基数上限' },
+    { key: 'housingAllowance', label: '房补' }, { key: 'exchangeRate', label: '汇率 (RMB→USD)' },
   ];
 
   return (
@@ -191,13 +186,13 @@ export function SettingsPage() {
                 <SelectContent>
                   <SelectItem value="shenzhen">深圳社保</SelectItem>
                   <SelectItem value="hongkong">香港 MPF</SelectItem>
-                  <SelectItem value="outsourcing">外包</SelectItem>
+                  <SelectItem value="beijing">北京社保</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <Button onClick={addEntity} variant="outline"><Plus className="h-4 w-4 mr-1" /> 添加</Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-2">计算类型决定薪资计算逻辑：深圳社保(养老/医疗/失业/公积金) 或 香港 MPF 或 外包(手工输入)</p>
+          <p className="text-xs text-muted-foreground mt-2">计算类型决定薪资计算逻辑：深圳社保(养老/医疗/失业/公积金) 或 北京社保 或 香港 MPF</p>
         </CardContent>
       </Card>
 

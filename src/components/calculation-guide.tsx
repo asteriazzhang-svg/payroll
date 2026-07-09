@@ -15,7 +15,7 @@ export function CalculationGuide() {
           <section>
             <h3 className="font-semibold text-lg mb-2">计算流程总览</h3>
             <p className="text-sm text-muted-foreground mb-3">
-              本系统根据员工的签约主体、任职性质和发放币种，采用不同的计算方法。首先区分员工签约主体（豪腾灵动、豪腾创想、境外主体），然后区分任职性质（全职、外包、实习生），最后确定发放币种（人民币、港币）。
+              本系统根据员工的签约主体、任职性质和发放币种，采用不同的计算方法。首先区分员工签约主体（豪腾灵动、豪腾创想、境外主体），然后区分任职性质（全职、外包、实习生），最后确定发放币种（人民币、美元）。
             </p>
             <div className="flex flex-wrap gap-2">
               <Badge variant="default">豪腾灵动</Badge>
@@ -27,7 +27,7 @@ export function CalculationGuide() {
               <Badge>实习生</Badge>
               <span className="mx-2">|</span>
               <Badge>RMB</Badge>
-              <Badge>HKD</Badge>
+              <Badge>USD</Badge>
             </div>
           </section>
 
@@ -140,7 +140,7 @@ export function CalculationGuide() {
 
           {/* Hong Kong Full-time */}
           <section className="space-y-3">
-            <h3 className="font-semibold text-lg">境外主体 - 全职员工（港币）</h3>
+            <h3 className="font-semibold text-lg">境外主体 - 全职员工（美元）</h3>
             <div className="bg-muted/30 rounded-md p-4 space-y-3">
               <div>
                 <h4 className="font-medium mb-1">1. 应计薪资</h4>

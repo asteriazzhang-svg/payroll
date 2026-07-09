@@ -135,39 +135,47 @@ export function PayrollCalculator() {
     });
   }, [activeEmployees, payrollInputs, config, savedRecords, taxDeductions]);
 
-  // Calculate totals
+  // Calculate totals — all aggregated in RMB (USD converted at exchangeRate)
   const totals = useMemo(() => {
     let totalAccrued = 0;
-    let totalDeductions = 0;
+    let totalDeductionsPersonal = 0;  // 个人侧五险一金
+    let totalDeductionsCompany = 0;   // 公司侧五险一金
     let totalTax = 0;
     let totalMeal = 0;
     let totalPayableRMB = 0;
-    let totalPayableHKD = 0;
     let totalEmployerCostRMB = 0;
-    let totalEmployerCostHKD = 0;
     for (const { record } of results) {
-      totalAccrued += record.accruedSalary;
-      totalDeductions += record.pensionPersonal + record.medicalPersonal +
-        record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal;
-      totalTax += record.taxWithheld;
-      totalMeal += record.housingAllowance;
+      const fx = record.currency === 'USD' ? config.exchangeRate : 1; // RMB per USD
+      totalAccrued += record.accruedSalary * fx;
+      totalDeductionsPersonal +=
+        (record.pensionPersonal + record.medicalPersonal +
+        record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal) * fx;
+      totalDeductionsCompany +=
+        (record.pensionCompany + record.medicalCompany +
+        record.unemploymentCompany + record.maternityCompany +
+        record.workInjuryCompany + record.housingFundCompany + record.mpfCompany) * fx;
+      totalTax += record.taxWithheld * fx;
+      totalMeal += record.housingAllowance * fx;
       if (record.currency === 'RMB') {
         totalPayableRMB += record.payableAmount;
         totalEmployerCostRMB += record.employerCost;
+      } else if (record.currency === 'USD') {
+        totalPayableRMB += record.payableAmount * config.exchangeRate;
+        totalEmployerCostRMB += record.employerCost * config.exchangeRate;
       } else {
-        totalPayableHKD += record.payableAmount;
-        totalEmployerCostHKD += record.employerCost;
+        totalPayableRMB += record.payableAmount;
+        totalEmployerCostRMB += record.employerCost;
       }
     }
-    return { totalAccrued, totalDeductions, totalTax, totalMeal, totalPayableRMB, totalPayableHKD, totalEmployerCostRMB, totalEmployerCostHKD };
-  }, [results]);
+    return { totalAccrued, totalDeductionsPersonal, totalDeductionsCompany, totalTax, totalMeal, totalPayableRMB, totalEmployerCostRMB };
+  }, [results, config.exchangeRate]);
 
   const [saving, setSaving] = useState(false);
   const handleSaveAll = async () => {
     setSaving(true);
     try {
       const payload = activeEmployees.map((employee) => {
-      const input = payrollInputs[employee.id] ?? {
+      const rawInput = payrollInputs[employee.id] ?? {
           employeeId: employee.id,
           year: config.year,
           month: config.month,
@@ -179,6 +187,10 @@ export function PayrollCalculator() {
           bonus: 0,
           housingFundRatio: employee.defaultHousingFundRatio,
         };
+        // Always override year/month to match the current config period,
+        // so stale inputs from a different month don't get saved under the
+        // wrong period.
+        const input = { ...rawInput, year: config.year, month: config.month };
         return { employeeId: employee.id, input };
       });
       await saveRecords(payload);
@@ -196,7 +208,7 @@ export function PayrollCalculator() {
       '姓名', '部门', '签约主体', '任职性质', '币种',
       'Base', '应出勤天数', '计薪出勤天数', '事假(小时)', '医疗期病假(天)',
       '应计薪资', '养老个人', '医疗个人', '失业个人', '公积金个人', 'MPF个人',
-      '个税代扣', '房补', '奖金', '调整项', '应发金额', '应发港币',
+      '个税代扣', '房补', '奖金', '调整项', '应发金额', '折算人民币',
     ];
     const rows = results.map(({ employee, input, record }) => [
       employee.name,
@@ -217,9 +229,12 @@ export function PayrollCalculator() {
       record.mpfPersonal.toFixed(2),
       record.taxWithheld.toFixed(2),
       record.housingAllowance.toFixed(2),
+      (record.bonus ?? 0).toFixed(2),
       record.adjustment.toFixed(2),
       record.payableAmount.toFixed(2),
-      record.payableHKD?.toFixed(2) ?? '',
+      employee.currency === 'USD'
+        ? (record.payableRMB ?? record.payableAmount * config.exchangeRate).toFixed(2)
+        : record.payableAmount.toFixed(2),
     ]);
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
@@ -311,34 +326,37 @@ export function PayrollCalculator() {
       </Card>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">应计薪资合计</div>
-            <div className="text-2xl font-bold">{formatNumber(totals.totalAccrued)}</div>
+            <div className="text-2xl font-bold">¥{formatNumber(totals.totalAccrued)}</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <div className="text-sm text-muted-foreground">五险一金/MPF合计</div>
-            <div className="text-2xl font-bold">{formatNumber(totals.totalDeductions)}</div>
+            <div className="text-sm text-muted-foreground">个人侧五险一金合计</div>
+            <div className="text-2xl font-bold">¥{formatNumber(totals.totalDeductionsPersonal)}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-sm text-muted-foreground">公司侧五险一金合计</div>
+            <div className="text-2xl font-bold">¥{formatNumber(totals.totalDeductionsCompany)}</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">个税代扣合计</div>
-            <div className="text-2xl font-bold">{formatNumber(totals.totalTax)}</div>
+            <div className="text-2xl font-bold">¥{formatNumber(totals.totalTax)}</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <div className="text-sm text-muted-foreground">应发金额</div>
+            <div className="text-sm text-muted-foreground">总应发金额</div>
             <div className="text-2xl font-bold space-y-1">
               {totals.totalPayableRMB > 0 && (
                 <div className="text-blue-600">¥{formatNumber(totals.totalPayableRMB)}</div>
-              )}
-              {totals.totalPayableHKD > 0 && (
-                <div className="text-green-600">HK${formatNumber(totals.totalPayableHKD)}</div>
               )}
             </div>
           </CardContent>
@@ -349,9 +367,6 @@ export function PayrollCalculator() {
             <div className="text-2xl font-bold space-y-1">
               {totals.totalEmployerCostRMB > 0 && (
                 <div className="text-blue-700 dark:text-blue-300">¥{formatNumber(totals.totalEmployerCostRMB)}</div>
-              )}
-              {totals.totalEmployerCostHKD > 0 && (
-                <div className="text-blue-700 dark:text-blue-300">HK${formatNumber(totals.totalEmployerCostHKD)}</div>
               )}
             </div>
             <div className="text-xs text-muted-foreground mt-1">应计+公司侧五险一金</div>
@@ -377,7 +392,7 @@ export function PayrollCalculator() {
                   <TableHead className="min-w-[90px]">性质</TableHead>
                   <TableHead className="text-right min-w-[120px]">Base</TableHead>
                   <TableHead className="text-center min-w-[110px]">应出勤天数</TableHead>
-                  <TableHead className="text-center min-w-[110px]">计薪出勤天数</TableHead>
+                  <TableHead className="text-center min-w-[110px]"><div>出勤天数</div><div className="text-xs font-normal text-muted-foreground">打卡+请假</div></TableHead>
                   <TableHead className="text-center min-w-[110px]">事假 (小时)</TableHead>
                   <TableHead className="text-center min-w-[110px]">医疗期病假 (天)</TableHead>
                   <TableHead className="text-center min-w-[110px]">公积金</TableHead>
@@ -456,6 +471,19 @@ function PayrollRow({
     record.pensionPersonal + record.medicalPersonal +
     record.unemploymentPersonal + record.housingFundPersonal + record.mpfPersonal;
 
+  // Detect leave-month over-attendance: if employee has a leaveDate in the
+  // current calc month, attendanceDays should not exceed in-service days.
+  const leaveWarn = useMemo(() => {
+    if (!employee.leaveDate) return false;
+    const ld = new Date(employee.leaveDate);
+    if (isNaN(ld.getTime())) return false;
+    if (ld.getFullYear() !== config.year || (ld.getMonth() + 1) !== config.month) return false;
+    // In-service days = leave date's day-of-month (they worked up to and
+    // including that day). If attendanceDays exceeds this, flag it.
+    const inServiceDays = ld.getDate();
+    return (input?.attendanceDays ?? 0) > inServiceDays;
+  }, [employee.leaveDate, config.year, config.month, input?.attendanceDays]);
+
   // 主体 badge 颜色
   const entityVariant =
     employee.entity === '豪腾灵动' ? 'default' :
@@ -479,7 +507,7 @@ function PayrollRow({
       </TableCell>
       <TableCell className="text-right min-w-[120px]">
         {employee.baseSalary > 0 ? formatNumber(employee.baseSalary) : '-'}
-        {employee.dailyRate ? `${formatNumber(employee.dailyRate)}/天` : ''}
+        {employee.dailyRate ? `${formatNumber(Math.abs(employee.dailyRate))}/天` : ''}
       </TableCell>
       {/* 应出勤天数 */}
       <TableCell className="min-w-[110px]">
@@ -492,17 +520,19 @@ function PayrollRow({
           title="应出勤天数（该月标准工作日数）"
         />
       </TableCell>
-      {/* 计薪出勤天数 — 实际出勤 > 应出勤 时红字提示 */}
+      {/* 出勤天数 — 离职月出勤>在职天数时标红 */}
       <TableCell className="min-w-[110px]">
         <Input
           type="number"
           step="0.5"
           value={input?.attendanceDays ?? 0}
           onChange={(e) => onInputChange({ attendanceDays: parseFloat(e.target.value) || 0 })}
-          className={`w-24 h-8 text-center ${record.overAttend ? 'text-red-600 border-red-500' : ''}`}
-          title={record.overAttend
-            ? `⚠️ 计薪出勤(${input?.attendanceDays}) 大于应出勤(${record.scheduledDays ?? '-'})，应计薪资已封顶到 Base。实际出勤天数可能有误。`
-            : '计薪出勤天数'}
+          className={`w-24 h-8 text-center ${record.overAttend || leaveWarn ? 'text-red-600 border-red-500' : ''}`}
+          title={leaveWarn
+            ? `⚠️ 该员工本月已离职，在职天数不足${input?.attendanceDays}天，请检查出勤天数。`
+            : record.overAttend
+              ? `⚠️ 出勤(${input?.attendanceDays}) 大于应出勤(${record.scheduledDays ?? '-'})，应计薪资已封顶到 Base。`
+              : '出勤天数（打卡+请假）'}
         />
       </TableCell>
       {/* 事假 (小时) */}
@@ -577,7 +607,7 @@ function PayrollRow({
         {record.taxWithheld > 0 ? `-${formatNumber(record.taxWithheld)}` : '-'}
       </TableCell>
       <TableCell className="text-right font-bold min-w-[140px]">
-        {employee.currency === 'HKD' ? 'HK$' : '¥'}
+        {employee.currency === 'USD' ? '$' : employee.currency === 'HKD' ? 'HK$' : '¥'}
         {formatNumber(record.payableAmount)}
       </TableCell>
       <TableCell className="text-center min-w-[90px]">
@@ -599,30 +629,10 @@ function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
           <DialogTitle>计薪参数设置</DialogTitle>
         </DialogHeader>
         <div className="space-y-5">
-          {/* Section 1: Basic */}
+          {/* Section 1: Basic params only */}
           <div>
             <div className="font-medium text-sm mb-2">基础参数</div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>深圳应计薪天数</Label>
-                <Input
-                  type="number"
-                  step="0.25"
-                  value={config.szWorkingDays}
-                  onChange={(e) => updateConfig({ szWorkingDays: parseFloat(e.target.value) || 21.75 })}
-                />
-                <p className="text-xs text-muted-foreground mt-1">标准为21.75天</p>
-              </div>
-              <div>
-                <Label>香港应计薪天数</Label>
-                <Input
-                  type="number"
-                  step="0.5"
-                  value={config.hkWorkingDays}
-                  onChange={(e) => updateConfig({ hkWorkingDays: parseFloat(e.target.value) || 30 })}
-                />
-                <p className="text-xs text-muted-foreground mt-1">标准为30天</p>
-              </div>
               <div>
                 <Label>房补 (RMB)</Label>
                 <Input
@@ -632,62 +642,18 @@ function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                 />
               </div>
               <div>
-                <Label>汇率 (RMB→HKD)</Label>
+                <Label>汇率 (RMB→USD)</Label>
                 <Input
                   type="number"
                   step="0.01"
                   value={config.exchangeRate}
                   onChange={(e) => {
                     const v = parseFloat(e.target.value);
-                    // Keep the parsed value when valid; otherwise retain the
-                    // current rate rather than silently resetting to a hardcoded
-                    // magic number (the old behavior lost user input on empty).
                     updateConfig({ exchangeRate: Number.isFinite(v) && v > 0 ? v : config.exchangeRate });
                   }}
                 />
+                <p className="text-xs text-muted-foreground mt-1">1 USD = X RMB（如 7.2）</p>
               </div>
-            </div>
-          </div>
-
-          {/* Section 2: Shenzhen social insurance / housing fund base caps */}
-          <div>
-            <div className="font-medium text-sm mb-1">深圳社保 / 公积金 缴费基数上下限</div>
-            <p className="text-xs text-muted-foreground mb-3">
-              员工 Base 超过上限按上限算，低于下限按下限算。默认是 2026 年深圳官方公布值，会随政策调整。
-            </p>
-            <div className="space-y-3">
-              <BaseRangeRow
-                label="养老保险"
-                rateNote="个人 8%"
-                min={config.szPensionBaseMin}
-                max={config.szPensionBaseMax}
-                onMinChange={(v) => updateConfig({ szPensionBaseMin: v })}
-                onMaxChange={(v) => updateConfig({ szPensionBaseMax: v })}
-              />
-              <BaseRangeRow
-                label="医疗保险"
-                rateNote="个人 2%（一档）"
-                min={config.szMedicalBaseMin}
-                max={config.szMedicalBaseMax}
-                onMinChange={(v) => updateConfig({ szMedicalBaseMin: v })}
-                onMaxChange={(v) => updateConfig({ szMedicalBaseMax: v })}
-              />
-              <BaseRangeRow
-                label="失业保险"
-                rateNote="个人 0.2%"
-                min={config.szUnemploymentBaseMin}
-                max={config.szUnemploymentBaseMax}
-                onMinChange={(v) => updateConfig({ szUnemploymentBaseMin: v })}
-                onMaxChange={(v) => updateConfig({ szUnemploymentBaseMax: v })}
-              />
-              <BaseRangeRow
-                label="住房公积金"
-                rateNote="个人 5%-12%"
-                min={config.szHousingFundBaseMin}
-                max={config.szHousingFundBaseMax}
-                onMinChange={(v) => updateConfig({ szHousingFundBaseMin: v })}
-                onMaxChange={(v) => updateConfig({ szHousingFundBaseMax: v })}
-              />
             </div>
           </div>
         </div>
@@ -870,14 +836,20 @@ function DetailDialog({ employeeId, onClose }: { employeeId: string | null; onCl
             )}
             <div className="border-t pt-2 flex justify-between font-bold text-lg">
               <span>应发金额</span>
-              <span className={employee.currency === 'HKD' ? 'text-green-600' : 'text-blue-600'}>
+              <span className={employee.currency === 'USD' ? 'text-green-600' : 'text-blue-600'}>
                 {formatCurrency(record.payableAmount, employee.currency)}
               </span>
             </div>
             {record.payableHKD && employee.currency === 'RMB' && (
               <div className="flex justify-between text-sm text-muted-foreground">
-                <span>折算港币</span>
-                <span>HK${formatNumber(record.payableHKD)}</span>
+                <span>折算美元</span>
+                <span>${formatNumber(record.payableHKD)}</span>
+              </div>
+            )}
+            {record.payableRMB && employee.currency === 'USD' && (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>折算人民币</span>
+                <span>¥{formatNumber(record.payableRMB)}</span>
               </div>
             )}
           </div>
@@ -889,6 +861,7 @@ function DetailDialog({ employeeId, onClose }: { employeeId: string | null; onCl
               <CalcRow label="累计收入额" value={record.cumIncome!} />
               <CalcRow label="累计减除费用" value={record.cumDeduction!} />
               <CalcRow label="累计专项扣除" value={record.cumSpecial!} />
+              <CalcRow label="累计个税专项附加扣除" value={-(record.cumSpecialAdditional ?? 0)} />
               <CalcRow label="累计应纳税所得额" value={record.taxableIncome!} />
               <div className="flex justify-between text-sm">
                 <span>适用税率</span>
@@ -911,11 +884,12 @@ function DetailDialog({ employeeId, onClose }: { employeeId: string | null; onCl
 
 function CalcRow({ label, value, currency = 'RMB' }: { label: string; value: number; currency?: string }) {
   const isNegative = value < 0;
+  const symbol = currency === 'USD' ? '$' : currency === 'HKD' ? 'HK$' : '¥';
   return (
     <div className="flex justify-between text-sm">
       <span className="text-muted-foreground">{label}</span>
       <span className={isNegative ? 'text-red-600' : ''}>
-        {value < 0 ? '-' : ''}{currency === 'HKD' ? 'HK$' : '¥'}{formatNumber(Math.abs(value))}
+        {value < 0 ? '-' : ''}{symbol}{formatNumber(Math.abs(value))}
       </span>
     </div>
   );

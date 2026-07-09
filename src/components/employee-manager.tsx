@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { usePayrollStore } from '@/lib/store';
 import { api } from '@/lib/api-client';
 import type { Employee, Entity, EmploymentType, Currency, InternSalaryType, CityConfig } from '@/lib/types';
@@ -12,21 +12,42 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, Users, Search, Download } from 'lucide-react';
+import { Plus, Pencil, Trash2, Users, Search, Download, Edit3, Save, ChevronLeft, ChevronRight } from 'lucide-react';
+import { formatNumber } from '@/lib/payroll';
 
 const ENTITIES: Entity[] = ['豪腾灵动', '豪腾创想', '境外主体'];
 const EMPLOYMENT_TYPES: EmploymentType[] = ['全职', '实习生', '外包'];
-const CURRENCIES: Currency[] = ['RMB', 'HKD'];
+const CURRENCIES: Currency[] = ['RMB', 'HKD', 'USD'];
 const INTERN_TYPES: InternSalaryType[] = ['月薪', '日薪'];
 const HOUSING_FUND_RATIOS = [0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12];
 
+/** A per-month row in the additional-deductions table. */
+interface TaxDeductionRow {
+  id: string;
+  employeeId: string;
+  year: number;
+  month: number;
+  taxChildEducation: number;
+  taxContinuingEducation: number;
+  taxHousingLoanInterest: number;
+  taxHousingRent: number;
+  taxElderlySupport: number;
+  taxInfantCare: number;
+}
+
 export function EmployeeManager() {
-  const { employees, addEmployee, updateEmployee, deleteEmployee } = usePayrollStore();
+  const { employees, addEmployee, updateEmployee, deleteEmployee, config } = usePayrollStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterEntity, setFilterEntity] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+
+  // 个税扣除 - month picker
+  const [viewYear, setViewYear] = useState(config.year);
+  const [viewMonth, setViewMonth] = useState(config.month);
+  const [taxRows, setTaxRows] = useState<Record<string, TaxDeductionRow>>({});
+  const [editingTax, setEditingTax] = useState<Employee | null>(null);
 
   const filteredEmployees = employees.filter((emp) => {
     const matchSearch = emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -35,6 +56,76 @@ export function EmployeeManager() {
     const matchType = filterType === 'all' || emp.employmentType === filterType;
     return matchSearch && matchEntity && matchType;
   });
+
+  const loadTaxRows = async () => {
+    try {
+      const data = await api<TaxDeductionRow[]>(
+        `/api/tax-deductions?year=${viewYear}&month=${viewMonth}`
+      );
+      const map: Record<string, TaxDeductionRow> = {};
+      for (const r of data) map[r.employeeId] = r;
+      setTaxRows(map);
+    } catch {
+      setTaxRows({});
+    }
+  };
+
+  useEffect(() => {
+    loadTaxRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewYear, viewMonth, employees.length]);
+
+  const goPrev = () => {
+    if (viewMonth === 1) { setViewYear(viewYear - 1); setViewMonth(12); }
+    else { setViewMonth(viewMonth - 1); }
+  };
+  const goNext = () => {
+    if (viewMonth === 12) { setViewYear(viewYear + 1); setViewMonth(1); }
+    else { setViewMonth(viewMonth + 1); }
+  };
+
+  const updateTaxRow = (employeeId: string, patch: Partial<TaxDeductionRow>) => {
+    setTaxRows((prev) => {
+      const existing = prev[employeeId];
+      const merged: TaxDeductionRow = existing
+        ? { ...existing, ...patch }
+        : {
+            id: `local-${employeeId}`,
+            employeeId,
+            year: viewYear,
+            month: viewMonth,
+            taxChildEducation: 0,
+            taxContinuingEducation: 0,
+            taxHousingLoanInterest: 0,
+            taxHousingRent: 0,
+            taxElderlySupport: 0,
+            taxInfantCare: 0,
+            ...patch,
+          };
+      return { ...prev, [employeeId]: merged };
+    });
+  };
+
+  const handleTaxSave = async (employee: Employee) => {
+    const row = taxRows[employee.id];
+    if (!row) { setEditingTax(null); return; }
+    await api(`/api/tax-deductions/${employee.id}`, {
+      method: 'PUT',
+      body: {
+        employeeId: employee.id,
+        year: viewYear,
+        month: viewMonth,
+        taxChildEducation: row.taxChildEducation,
+        taxContinuingEducation: row.taxContinuingEducation,
+        taxHousingLoanInterest: row.taxHousingLoanInterest,
+        taxHousingRent: row.taxHousingRent,
+        taxElderlySupport: row.taxElderlySupport,
+        taxInfantCare: row.taxInfantCare,
+      },
+    });
+    await loadTaxRows();
+    setEditingTax(null);
+  };
 
   const handleAdd = () => {
     setEditingEmployee(null);
@@ -56,43 +147,53 @@ export function EmployeeManager() {
     }
   };
 
-  // Export all employees to a CSV file (A1: download functionality).
+  // Export all employees + tax deductions to a CSV file.
   const handleExportEmployees = () => {
     const headers = [
-      '姓名', '身份证号', '部门', '签约主体', '工作城市', '任职性质', '币种',
-      '月薪', '日薪', '实习生类型', '公积金比例', '是否发放房补',
-      '2025-26社保基数', '2025-26公积金基数',
-      '入职日期', '离职日期', '备注',
+      '姓名', '部门', '签约主体', '工作城市', '任职性质', '币种',
+      '月薪', '日薪', '入职日期', '离职日期',
+      '公积金比例', '房补', '社保基数', '公积金基数',
+      '子女教育', '继续教育', '住房贷款利息', '住房租金', '赡养老人', '婴幼儿照护',
+      '专项附加扣除调整项', '专项附加扣除月合计',
     ];
-    const rows = employees.map((emp) => [
-      emp.name,
-      emp.idNumber ?? '',
-      emp.department ?? '',
-      emp.entity,
-      emp.workCity ?? '深圳',
-      emp.employmentType,
-      emp.currency,
-      emp.baseSalary,
-      emp.dailyRate ?? '',
-      emp.internSalaryType ?? '',
-      `${(emp.defaultHousingFundRatio * 100).toFixed(0)}%`,
-      emp.noHousingAllowance ? '不发放' : '发放',
-      emp.socialBase ?? '',
-      emp.housingFundBase ?? '',
-      emp.joinDate ?? '',
-      emp.leaveDate ?? '至今',
-      emp.notes ?? '',
-    ]);
+    const rows = filteredEmployees.map((emp) => {
+      const t = taxRows[emp.id];
+      const child = t?.taxChildEducation ?? 0;
+      const cont = t?.taxContinuingEducation ?? 0;
+      const loan = t?.taxHousingLoanInterest ?? 0;
+      const rent = t?.taxHousingRent ?? 0;
+      const elderly = t?.taxElderlySupport ?? 0;
+      const infant = t?.taxInfantCare ?? 0;
+      const total = child + cont + loan + rent + elderly + infant;
+      return [
+        emp.name,
+        emp.department ?? '',
+        emp.entity,
+        emp.workCity ?? '深圳',
+        emp.employmentType,
+        emp.currency,
+        emp.baseSalary,
+        emp.dailyRate ?? '',
+        emp.joinDate ?? '',
+        emp.leaveDate ?? '至今',
+        `${(emp.defaultHousingFundRatio * 100).toFixed(0)}%`,
+        emp.noHousingAllowance ? '不发放' : '发放',
+        emp.socialBase ?? '',
+        emp.housingFundBase ?? '',
+        child, cont, loan, rent, elderly, infant,
+        '', // 专项附加扣除调整项 (currently unused, kept for column alignment)
+        total,
+      ];
+    });
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
-    // Add BOM for Excel
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     const today = new Date().toISOString().slice(0, 10);
-    link.download = `员工信息_${today}.csv`;
+    link.download = `员工信息_${viewYear}${String(viewMonth).padStart(2, '0')}_${today}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -101,12 +202,40 @@ export function EmployeeManager() {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
               员工管理 ({employees.length})
             </CardTitle>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Month picker — controls 个税专项附加扣除 column */}
+              <Button variant="outline" size="sm" onClick={goPrev}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="text-sm font-medium min-w-[110px] text-center">
+                {viewYear} 年 {viewMonth} 月
+              </div>
+              <Button variant="outline" size="sm" onClick={goNext}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Select
+                value={`${viewYear}-${viewMonth}`}
+                onValueChange={(v) => {
+                  const [y, m] = v.split('-').map(Number);
+                  setViewYear(y); setViewMonth(m);
+                }}
+              >
+                <SelectTrigger className="w-[130px] h-8">
+                  <SelectValue placeholder="快速跳转" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <SelectItem key={`${viewYear}-${m}`} value={`${viewYear}-${m}`}>
+                      {viewYear} 年 {m} 月
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button variant="outline" onClick={handleExportEmployees}>
                 <Download className="h-4 w-4 mr-1" />
                 下载员工信息
@@ -154,122 +283,152 @@ export function EmployeeManager() {
             </Select>
           </div>
 
-          {/* Employee Table */}
-          <div className="rounded-md border max-h-[600px] overflow-y-auto">
+          {/* Employee Table (with monthly tax deductions merged in) */}
+          <div className="rounded-md border max-h-[600px] overflow-auto">
             <Table>
-              <TableHeader className="sticky top-0 bg-background">
+              <TableHeader className="sticky top-0 bg-background z-10">
                 <TableRow>
-                  <TableHead>姓名</TableHead>
-                  <TableHead>部门</TableHead>
-                  <TableHead>签约主体</TableHead>
-                  <TableHead>工作城市</TableHead>
-                  <TableHead>任职性质</TableHead>
-                  <TableHead>币种</TableHead>
-                  <TableHead className="text-right">月薪</TableHead>
-                  <TableHead className="text-right">日薪</TableHead>
-                  <TableHead className="text-center">公积金比例</TableHead>
-                  <TableHead className="text-center">房补</TableHead>
-                  <TableHead className="text-right">2025-26社保基数</TableHead>
-                  <TableHead className="text-right">2025-26公积金基数</TableHead>
-                  <TableHead>入职日期</TableHead>
-                  <TableHead>离职日期</TableHead>
-                  <TableHead className="text-center">操作</TableHead>
+                  <TableHead className="sticky left-0 bg-background z-20 min-w-[100px]">姓名</TableHead>
+                  <TableHead className="min-w-[100px]">部门</TableHead>
+                  <TableHead className="min-w-[110px]">签约主体</TableHead>
+                  <TableHead className="min-w-[90px]">工作城市</TableHead>
+                  <TableHead className="min-w-[80px]">任职性质</TableHead>
+                  <TableHead className="min-w-[70px]">币种</TableHead>
+                  <TableHead className="text-right min-w-[100px]">月薪</TableHead>
+                  <TableHead className="text-right min-w-[90px]">日薪</TableHead>
+                  <TableHead className="min-w-[100px]">入职日期</TableHead>
+                  <TableHead className="min-w-[100px]">离职日期</TableHead>
+                  <TableHead className="text-center min-w-[90px]">公积金比例</TableHead>
+                  <TableHead className="text-center min-w-[80px]">房补</TableHead>
+                  <TableHead className="text-right min-w-[100px]">社保基数</TableHead>
+                  <TableHead className="text-right min-w-[100px]">公积金基数</TableHead>
+                  <TableHead className="text-right min-w-[90px]">子女教育</TableHead>
+                  <TableHead className="text-right min-w-[90px]">继续教育</TableHead>
+                  <TableHead className="text-right min-w-[110px]">住房贷款利息</TableHead>
+                  <TableHead className="text-right min-w-[90px]">住房租金</TableHead>
+                  <TableHead className="text-right min-w-[90px]">赡养老人</TableHead>
+                  <TableHead className="text-right min-w-[90px]">婴幼儿照护</TableHead>
+                  <TableHead className="text-right min-w-[110px]">专项附加扣除调整项</TableHead>
+                  <TableHead className="text-right min-w-[110px]">专项附加扣除月合计</TableHead>
+                  <TableHead className="text-center min-w-[140px]"><div>操作</div><div className="text-[10px] font-normal text-muted-foreground leading-tight">编辑员工 / 编辑专项附加扣除 / 删除</div></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredEmployees.map((emp) => (
-                  <TableRow key={emp.id}>
-                    <TableCell className="font-medium">{emp.name}</TableCell>
-                    <TableCell>{emp.department ?? '-'}</TableCell>
-                    <TableCell>
-                      <Badge variant={emp.entity === '豪腾灵动' ? 'default' : emp.entity === '豪腾创想' ? 'default' : emp.entity === '境外主体' ? 'secondary' : 'outline'}>
-                        {emp.entity}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {emp.workCity ? (
-                        <Badge variant="outline" className="text-xs">{emp.workCity}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">深圳</span>
-                      )}
-                    </TableCell>
-                    <TableCell>{emp.employmentType}</TableCell>
-                    <TableCell>{emp.currency}</TableCell>
-                    <TableCell className="text-right">
-                      {emp.baseSalary > 0 ? emp.baseSalary.toLocaleString() : '-'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {emp.dailyRate ? `${emp.dailyRate}/天` : '-'}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {(emp.defaultHousingFundRatio * 100).toFixed(0)}%
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {emp.noHousingAllowance ? (
-                        <Badge variant="outline" className="text-muted-foreground">不发放</Badge>
-                      ) : (
-                        <Badge variant="secondary">发放</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {(emp.entity !== '豪腾灵动' && emp.entity !== '豪腾创想') ? (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      ) : emp.socialBase !== undefined ? (
-                        <div>
-                          <div className="font-medium">{emp.socialBase.toLocaleString()}</div>
-                          <div className="text-xs text-orange-600">自定义</div>
+                {filteredEmployees.map((emp) => {
+                  const isMainland = emp.entity === '豪腾灵动' || emp.entity === '豪腾创想';
+                  const t = taxRows[emp.id];
+                  const child = t?.taxChildEducation ?? 0;
+                  const cont = t?.taxContinuingEducation ?? 0;
+                  const loan = t?.taxHousingLoanInterest ?? 0;
+                  const rent = t?.taxHousingRent ?? 0;
+                  const elderly = t?.taxElderlySupport ?? 0;
+                  const infant = t?.taxInfantCare ?? 0;
+                  const total = child + cont + loan + rent + elderly + infant;
+                  return (
+                    <TableRow key={emp.id}>
+                      <TableCell className="font-medium sticky left-0 bg-background z-10">{emp.name}</TableCell>
+                      <TableCell>{emp.department ?? '-'}</TableCell>
+                      <TableCell>
+                        <Badge variant={emp.entity === '境外主体' ? 'secondary' : 'default'}>
+                          {emp.entity}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {emp.workCity ? (
+                          <Badge variant="outline" className="text-xs">{emp.workCity}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">深圳</span>
+                        )}
+                      </TableCell>
+                      <TableCell>{emp.employmentType}</TableCell>
+                      <TableCell>{emp.currency}</TableCell>
+                      <TableCell className="text-right">
+                        {emp.baseSalary > 0 ? emp.baseSalary.toLocaleString() : '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {emp.dailyRate ? `${emp.dailyRate}/天` : '-'}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{emp.joinDate ?? '-'}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{emp.leaveDate ?? '至今'}</TableCell>
+                      <TableCell className="text-center">
+                        {emp.employmentType === '实习生'
+                          ? <Badge variant="outline" className="text-muted-foreground">无</Badge>
+                          : `${(emp.defaultHousingFundRatio * 100).toFixed(0)}%`}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {emp.noHousingAllowance || emp.employmentType === '外包'
+                          ? <Badge variant="outline" className="text-muted-foreground">不发放</Badge>
+                          : <Badge variant="secondary">发放</Badge>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {!isMainland ? <span className="text-muted-foreground text-xs">-</span>
+                          : emp.socialBase !== undefined ? emp.socialBase.toLocaleString()
+                          : emp.baseSalary > 0 ? <span className="text-muted-foreground">= 月薪</span>
+                          : <span className="text-muted-foreground text-xs">-</span>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {!isMainland ? <span className="text-muted-foreground text-xs">-</span>
+                          : emp.housingFundBase !== undefined ? emp.housingFundBase.toLocaleString()
+                          : emp.baseSalary > 0 ? <span className="text-muted-foreground">= 月薪</span>
+                          : <span className="text-muted-foreground text-xs">-</span>}
+                      </TableCell>
+                      <TableCell className="text-right">{isMainland && child > 0 ? formatNumber(child) : '-'}</TableCell>
+                      <TableCell className="text-right">{isMainland && cont > 0 ? formatNumber(cont) : '-'}</TableCell>
+                      <TableCell className="text-right">{isMainland && loan > 0 ? formatNumber(loan) : '-'}</TableCell>
+                      <TableCell className="text-right">{isMainland && rent > 0 ? formatNumber(rent) : '-'}</TableCell>
+                      <TableCell className="text-right">{isMainland && elderly > 0 ? formatNumber(elderly) : '-'}</TableCell>
+                      <TableCell className="text-right">{isMainland && infant > 0 ? formatNumber(infant) : '-'}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">-</TableCell>
+                      <TableCell className="text-right font-medium">{isMainland && total > 0 ? formatNumber(total) : '-'}</TableCell>
+                      <TableCell>
+                        <div className="flex justify-center gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(emp)} title="编辑员工">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          {isMainland && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={async () => {
+                                if (!t) {
+                                  try {
+                                    const prevMonth = viewMonth === 1
+                                      ? { y: viewYear - 1, m: 12 }
+                                      : { y: viewYear, m: viewMonth - 1 };
+                                    const prevData = await api<TaxDeductionRow[]>(
+                                      `/api/tax-deductions?year=${prevMonth.y}&month=${prevMonth.m}&employeeId=${emp.id}`
+                                    );
+                                    const prev = prevData[0];
+                                    updateTaxRow(emp.id, prev ? {
+                                      taxChildEducation: prev.taxChildEducation,
+                                      taxContinuingEducation: prev.taxContinuingEducation,
+                                      taxHousingLoanInterest: prev.taxHousingLoanInterest,
+                                      taxHousingRent: prev.taxHousingRent,
+                                      taxElderlySupport: prev.taxElderlySupport,
+                                      taxInfantCare: prev.taxInfantCare,
+                                    } : {});
+                                  } catch { /* ignore */ }
+                                }
+                                setEditingTax(emp);
+                              }}
+                              title="编辑个税专项附加扣除"
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete(emp.id)} title="删除员工">
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
                         </div>
-                      ) : emp.baseSalary > 0 ? (
-                        <div>
-                          <div className="text-muted-foreground">= Base</div>
-                          <div className="text-xs text-muted-foreground">{emp.baseSalary.toLocaleString()}</div>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {(emp.entity !== '豪腾灵动' && emp.entity !== '豪腾创想') ? (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      ) : emp.housingFundBase !== undefined ? (
-                        <div>
-                          <div className="font-medium">{emp.housingFundBase.toLocaleString()}</div>
-                          <div className="text-xs text-orange-600">自定义</div>
-                        </div>
-                      ) : emp.baseSalary > 0 ? (
-                        <div>
-                          <div className="text-muted-foreground">= Base</div>
-                          <div className="text-xs text-muted-foreground">{emp.baseSalary.toLocaleString()}</div>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {emp.joinDate ?? '-'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {emp.leaveDate ?? '至今'}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-center gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(emp)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(emp.id)}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
           {filteredEmployees.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              暂无员工数据
-            </div>
+            <div className="text-center py-8 text-muted-foreground">暂无员工数据</div>
           )}
         </CardContent>
       </Card>
@@ -291,7 +450,162 @@ export function EmployeeManager() {
           }
         }}
       />
+
+      <TaxDeductionEditDialog
+        employee={editingTax}
+        value={editingTax ? (taxRows[editingTax.id] ?? {
+          id: '',
+          employeeId: editingTax.id,
+          year: viewYear,
+          month: viewMonth,
+          taxChildEducation: 0,
+          taxContinuingEducation: 0,
+          taxHousingLoanInterest: 0,
+          taxHousingRent: 0,
+          taxElderlySupport: 0,
+          taxInfantCare: 0,
+        }) : null}
+        onChange={(patch) => editingTax && updateTaxRow(editingTax.id, patch)}
+        onClose={() => setEditingTax(null)}
+        onSave={() => editingTax && handleTaxSave(editingTax)}
+      />
     </div>
+  );
+}
+
+/** Sub-component: dialog for editing one employee's monthly tax additional deductions. */
+function TaxDeductionEditDialog({
+  employee,
+  value,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  employee: Employee | null;
+  value: TaxDeductionRow | null;
+  onChange: (patch: Partial<TaxDeductionRow>) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  if (!employee || !value) return null;
+
+  const total =
+    value.taxChildEducation +
+    value.taxContinuingEducation +
+    value.taxHousingLoanInterest +
+    value.taxHousingRent +
+    value.taxElderlySupport +
+    value.taxInfantCare;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try { await onSave(); } finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={!!employee} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            编辑专项附加扣除 — {employee.name}
+            （{employee.department ?? '-'}，{value.year}年{value.month}月）
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="text-xs text-muted-foreground p-2 bg-blue-50 dark:bg-blue-950/30 rounded">
+            💡 以下6项为月度扣除额。系统会自动汇总并用于个税累计预扣计算。
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>子女教育</Label>
+            <Select value={String(value.taxChildEducation)} onValueChange={(v) => onChange({ taxChildEducation: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">0</SelectItem>
+                <SelectItem value="1000">1000</SelectItem>
+                <SelectItem value="2000">2000</SelectItem>
+                <SelectItem value="3000">3000</SelectItem>
+                <SelectItem value="4000">4000</SelectItem>
+                <SelectItem value="6000">6000</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>继续教育（自由输入）</Label>
+            <Input type="number" step="1" min="0" value={value.taxContinuingEducation}
+              onChange={(e) => onChange({ taxContinuingEducation: parseFloat(e.target.value) || 0 })} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>住房贷款利息</Label>
+            <Select value={String(value.taxHousingLoanInterest)} onValueChange={(v) => onChange({ taxHousingLoanInterest: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">0</SelectItem>
+                <SelectItem value="1000">1000</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>住房租金</Label>
+            <Select value={String(value.taxHousingRent)} onValueChange={(v) => onChange({ taxHousingRent: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">0</SelectItem>
+                <SelectItem value="1500">1500</SelectItem>
+                <SelectItem value="1100">1100</SelectItem>
+                <SelectItem value="800">800</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>赡养老人（自由输入）</Label>
+            <Input type="number" step="1" min="0" max="3000" value={value.taxElderlySupport}
+              onChange={(e) => onChange({ taxElderlySupport: parseFloat(e.target.value) || 0 })} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>婴幼儿照护</Label>
+            <Select value={String(value.taxInfantCare)} onValueChange={(v) => onChange({ taxInfantCare: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">0</SelectItem>
+                <SelectItem value="1000">1000</SelectItem>
+                <SelectItem value="2000">2000</SelectItem>
+                <SelectItem value="3000">3000</SelectItem>
+                <SelectItem value="4000">4000</SelectItem>
+                <SelectItem value="6000">6000</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 专项附加扣除调整项 */}
+          <div className="space-y-1.5">
+            <Label>专项附加扣除调整项（自由输入，可正可负）</Label>
+            <Input
+              type="number"
+              step="0.01"
+              value={(value as any).adjustment ?? 0}
+              onChange={(e) => onChange({ adjustment: parseFloat(e.target.value) || 0 } as any)}
+            />
+            <p className="text-xs text-muted-foreground">用于手工调整本月专项附加扣除总额（直接加在月合计上）</p>
+          </div>
+
+          <div className="flex items-center justify-between p-3 bg-muted/30 rounded-md">
+            <span className="font-medium">月合计（含调整项）</span>
+            <span className="text-lg font-bold">{formatNumber(total + ((value as any).adjustment ?? 0))} 元</span>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>取消</Button>
+            <Button type="submit" disabled={saving}>
+              <Save className="h-4 w-4 mr-1" />
+              {saving ? '保存中...' : '保存'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -449,8 +763,7 @@ function EmployeeDialog({ open, onOpenChange, employee, onSave }: EmployeeDialog
               <Select
                 value={formData.currency}
                 onValueChange={(v) => setFormData({ ...formData, currency: v as Currency })}
-              >
-                <SelectTrigger>
+              >                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -461,8 +774,8 @@ function EmployeeDialog({ open, onOpenChange, employee, onSave }: EmployeeDialog
               </Select>
               <p className="text-xs text-muted-foreground mt-1">
                 {formData.entity === '境外主体'
-                  ? '默认 HKD，可改为 RMB 发放'
-                  : '默认 RMB，可改为 HKD 发放'}
+                  ? '默认 USD，可改为 RMB 发放'
+                  : '默认 RMB，可改为 USD 发放'}
               </p>
             </div>
           </div>
@@ -585,7 +898,7 @@ function EmployeeDialog({ open, onOpenChange, employee, onSave }: EmployeeDialog
               </div>
               {formData.internSalaryType === '日薪' ? (
                 <div>
-                  <Label htmlFor="dailyRate">日薪 ({formData.entity === '境外主体' ? 'HKD' : 'RMB'})</Label>
+                  <Label htmlFor="dailyRate">日薪 ({formData.entity === '境外主体' ? 'USD' : 'RMB'})</Label>
                   <Input
                     id="dailyRate"
                     type="number"
@@ -595,7 +908,7 @@ function EmployeeDialog({ open, onOpenChange, employee, onSave }: EmployeeDialog
                 </div>
               ) : (
                 <div>
-                  <Label htmlFor="baseSalary">月薪 Base ({formData.entity === '境外主体' ? 'HKD' : 'RMB'})</Label>
+                  <Label htmlFor="baseSalary">月薪 Base ({formData.entity === '境外主体' ? 'USD' : 'RMB'})</Label>
                   <Input
                     id="baseSalary"
                     type="number"
@@ -609,7 +922,7 @@ function EmployeeDialog({ open, onOpenChange, employee, onSave }: EmployeeDialog
             <div className="space-y-4">
               <div>
                 <Label htmlFor="baseSalary">
-                  月薪 Base ({formData.entity === '境外主体' ? 'HKD' : 'RMB'})
+                  月薪 Base ({formData.entity === '境外主体' ? 'USD' : 'RMB'})
                 </Label>
                 <Input
                   id="baseSalary"
@@ -750,10 +1063,6 @@ function SocialBaseInput({
         { label: '失业', min: config.szUnemploymentBaseMin, max: config.szUnemploymentBaseMax },
       ];
   const raw = value ?? base;
-  // Show "reset" button as long as user has ever set a value (not undefined),
-  // even if it happens to equal base. UX rule: an explicit value, even matching
-  // base, can be cleared so the auto-base mode kicks back in.
-  const isOverridden = value !== undefined;
   const wasClamped = ranges.some(r => raw < r.min || raw > r.max);
 
   return (
@@ -769,16 +1078,6 @@ function SocialBaseInput({
             ))}
           </div>
         </div>
-        {isOverridden && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(undefined)}
-          >
-            重置为 Base
-          </Button>
-        )}
       </div>
       <Input
         id="socialBase"
@@ -794,9 +1093,7 @@ function SocialBaseInput({
         <span className="text-muted-foreground">
           {value === undefined
             ? `当前使用 Base = ${base.toLocaleString()}`
-            : isOverridden
-              ? `自定义基数 = ${value.toLocaleString()}`
-              : `与 Base 相同 = ${base.toLocaleString()}`}
+            : `自定义基数 = ${value.toLocaleString()}`}
         </span>
         {wasClamped && (
           <span className="text-orange-600">
@@ -831,8 +1128,6 @@ function HousingFundBaseInput({
   const max = cityConf ? cityConf.housingFundBaseMax : config.szHousingFundBaseMax;
   const raw = value ?? base;
   const effective = Math.min(max, Math.max(min, raw));
-  // Show "reset" button as long as user has ever set a value (not undefined).
-  const isOverridden = value !== undefined;
   const wasClamped = raw !== effective;
 
   return (
@@ -847,16 +1142,6 @@ function HousingFundBaseInput({
             （{workCity ?? '深圳'}官方上限）
           </p>
         </div>
-        {isOverridden && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(undefined)}
-          >
-            重置为 Base
-          </Button>
-        )}
       </div>
       <Input
         id="housingFundBase"
@@ -872,9 +1157,7 @@ function HousingFundBaseInput({
         <span className="text-muted-foreground">
           {value === undefined
             ? `当前使用 Base = ${base.toLocaleString()}`
-            : isOverridden
-              ? `自定义基数 = ${value.toLocaleString()}`
-              : `与 Base 相同 = ${base.toLocaleString()}`}
+            : `自定义基数 = ${value.toLocaleString()}`}
         </span>
         {wasClamped && (
           <span className="text-orange-600">

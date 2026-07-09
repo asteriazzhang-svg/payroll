@@ -2,7 +2,7 @@
 
 export type Entity = '豪腾灵动' | '豪腾创想' | '境外主体';
 export type EmploymentType = '全职' | '实习生' | '外包';
-export type Currency = 'RMB' | 'HKD';
+export type Currency = 'RMB' | 'HKD' | 'USD';
 export type InternSalaryType = '月薪' | '日薪';
 export type EmployeeStatus = '在职' | '离职';
 

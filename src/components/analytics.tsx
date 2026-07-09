@@ -6,7 +6,6 @@ import type { PayrollRecord } from '@/lib/types';
 import {
   payableInCNY, payableInHKD, cnyFactor, safeNum, effectiveRate,
 } from '@/lib/exchange';
-import { useExchangeRate } from '@/hooks/use-exchange-rate';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -29,9 +28,8 @@ export function Analytics() {
     store.savedRecords && typeof store.savedRecords === 'object' ? store.savedRecords : {};
   const config = store.config;
 
-  // Live exchange rate (1 RMB = rate HKD), falls back to config value.
-  const fx = useExchangeRate(config.exchangeRate);
-  const rate = fx.rate;
+  // Use config exchange rate (no live fetching — use the rate from saved records/config).
+  const rate = config.exchangeRate;
 
   // Default selector: current config year/month, but if there's a saved month use that
   const initialMonth = useMemo(() => {
@@ -126,17 +124,8 @@ export function Analytics() {
             <div className="text-sm text-muted-foreground text-right">
               <div className="flex items-center gap-2">
                 <CalendarRange className="h-4 w-4" />
-                汇率 1 RMB = <strong className="text-foreground">{rate.toFixed(4)}</strong> HKD
-                <Badge variant={fx.source === 'live' ? 'default' : 'secondary'} className="text-[10px]">
-                  {fx.source === 'live' ? '实时' : '配置回退'}
-                </Badge>
+                汇率 1 USD = <strong className="text-foreground">{rate.toFixed(4)}</strong> RMB
               </div>
-              {fx.fetchedAt && (
-                <div className="text-[10px] mt-0.5">数据更新: {fx.fetchedAt}</div>
-              )}
-              {fx.error && (
-                <div className="text-[10px] mt-0.5 text-orange-600">实时获取失败，已用配置值 ({fx.error})</div>
-              )}
             </div>
           </div>
         </CardContent>
@@ -215,7 +204,7 @@ function OverviewSection({ records, rate }: { records: { record: PayrollRecord }
           <Metric label="最低" value={`¥${formatNumber(summary.minPayableCNY)}`} />
           <Metric label="应发合计" value={`¥${formatNumber(summary.payableTotalCNY)}`} />
           <Metric label="应发人民币总计" value={`¥${formatNumber(summary.payableRMB)}`} sub="RMB 员工" />
-          <Metric label="应发港币总计" value={`HK$${formatNumber(summary.payableHKD)}`} sub="HKD 员工" />
+          <Metric label="应发美元总计" value={`$${formatNumber(summary.payableHKD)}`} sub="USD 员工" />
         </div>
       </CardContent>
     </Card>
@@ -521,10 +510,10 @@ function CurrencySection({ records, rate }: { records: { record: PayrollRecord }
   const byCcy = useMemo(() => {
     const r = records.map((x) => x.record);
     const rmb = r.filter((x) => x.currency === 'RMB');
-    const hkd = r.filter((x) => x.currency === 'HKD');
+    const usd = r.filter((x) => x.currency === 'USD');
     return [
       { name: '人民币 (RMB)', 人数: rmb.length, 应发: rmb.reduce((s, x) => s + safeNum(x.payableAmount), 0), color: '#3b82f6' },
-      { name: '港币 (HKD)', 人数: hkd.length, 应发: hkd.reduce((s, x) => s + safeNum(x.payableAmount), 0), color: '#10b981' },
+      { name: '美元 (USD)', 人数: usd.length, 应发: usd.reduce((s, x) => s + safeNum(x.payableAmount), 0), color: '#10b981' },
     ];
   }, [records]);
   const total = byCcy.reduce((s, x) => s + x.应发, 0);
@@ -556,7 +545,7 @@ function CurrencySection({ records, rate }: { records: { record: PayrollRecord }
             <div className="text-lg font-bold text-blue-700 dark:text-blue-300">
               ¥ {formatNumber(totalCNY)}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">汇率 1 RMB = {r.toFixed(4)} HKD</div>
+            <div className="text-xs text-muted-foreground mt-1">汇率 1 USD = {r.toFixed(4)} RMB</div>
           </div>
         </div>
       </CardContent>
@@ -681,7 +670,7 @@ function TopEarnersSection({ records, rate }: { records: { record: PayrollRecord
                   <span className="text-xs text-muted-foreground ml-1">{rec.employmentType}</span>
                 </TableCell>
                 <TableCell className="text-right">
-                  {rec.currency === 'HKD' ? 'HK$' : '¥'}{formatNumber(rec.payableAmount)}
+                  {rec.currency === 'USD' ? '$' : '¥'}{formatNumber(rec.payableAmount)}
                 </TableCell>
                 <TableCell className="text-right font-bold">¥{formatNumber(rec.costCNY)}</TableCell>
               </TableRow>
